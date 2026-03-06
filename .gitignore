@@ -1,0 +1,9 @@
+reference/
+__pycache__/
+*.pyc
+*.pth
+*.safetensors
+.DS_Store
+*.egg-info/
+dist/
+build/
