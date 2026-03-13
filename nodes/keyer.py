@@ -1,13 +1,15 @@
 import torch
 import numpy as np
-from ..utils.color import srgb_to_linear, linear_to_srgb, despill_green
+from ..utils.color import linear_to_srgb
 
 
 class CK_Keyer:
-    """Main CorridorKey green screen keyer node.
+    """
+    Main CorridorKey green screen keyer node.
 
-    Takes an image and alpha hint mask, outputs foreground, alpha matte,
-    and premultiplied composite.
+    On MPS/CUDA uses OptimizedEngine.process_frame_tensor() — tensors stay
+    on-device through resize, norm, forward, and post-processing.
+    On CPU falls back to the reference engine's numpy path unchanged.
     """
 
     @classmethod
@@ -30,67 +32,64 @@ class CK_Keyer:
     FUNCTION = "key"
     CATEGORY = "CorridorKey"
 
-    def key(self, model, image, alpha_hint, input_is_linear, despill_strength,
-            auto_despeckle, despeckle_size, refiner_strength):
-        """Process each frame through CorridorKey engine.
 
-        Args:
-            model: CorridorKeyEngine instance from loader
-            image: [B, H, W, 3] sRGB float32 [0, 1]
-            alpha_hint: [B, H, W] float32 [0, 1]
-            input_is_linear: Whether input image is linear (e.g., from EXR)
-            despill_strength: Green spill removal strength
-            auto_despeckle: Remove small matte islands
-            despeckle_size: Min pixel count to keep
-            refiner_strength: Refiner delta multiplier
-        """
-        batch_size = image.shape[0]
-        fg_list = []
-        alpha_list = []
-        processed_list = []
+    def key(self, model, image, alpha_hint, input_is_linear,
+            despill_strength, auto_despeckle, despeckle_size, refiner_strength):
+        from ..utils.inference import OptimizedEngine
+        use_tensor_path = isinstance(model, OptimizedEngine)
 
-        for i in range(batch_size):
-            # Convert from ComfyUI [H, W, C] to numpy [H, W, C]
-            img_np = image[i].cpu().numpy()
-            mask_np = alpha_hint[i].cpu().numpy()
+        fg_list, alpha_list, processed_list = [], [], []
 
-            result = model.process_frame(
-                image=img_np,
-                mask_linear=mask_np,
-                input_is_linear=input_is_linear,
-                despill_strength=despill_strength,
-                auto_despeckle=auto_despeckle,
-                despeckle_size=despeckle_size,
-                refiner_scale=refiner_strength,
-            )
+        for i in range(image.shape[0]):
+            if use_tensor_path:
+                # Tensors go straight to the engine — no numpy round-trip
+                result = model.process_frame_tensor(
+                    image_t=image[i],
+                    mask_t=alpha_hint[i],
+                    input_is_linear=input_is_linear,
+                    despill_strength=despill_strength,
+                    auto_despeckle=auto_despeckle,
+                    despeckle_size=despeckle_size,
+                    refiner_scale=refiner_strength,
+                )
+                fg_t    = result["fg"]         # [H, W, 3] CPU float32
+                alpha_t = result["alpha"]      # [H, W, 1] CPU float32
+                proc_t  = result["processed"]  # [H, W, 4] CPU float32
 
-            # fg: [H, W, 3] sRGB — ready for ComfyUI IMAGE
-            fg_list.append(torch.from_numpy(result["fg"]).float())
+            else:
+                # CPU fallback — original reference engine numpy path
+                img_np  = image[i].cpu().numpy()
+                mask_np = alpha_hint[i].cpu().numpy()
+                result  = model.process_frame(
+                    image=img_np,
+                    mask_linear=mask_np,
+                    input_is_linear=input_is_linear,
+                    despill_strength=despill_strength,
+                    auto_despeckle=auto_despeckle,
+                    despeckle_size=despeckle_size,
+                    refiner_scale=refiner_strength,
+                )
+                fg_t = torch.from_numpy(result["fg"].astype(np.float32))
+                alpha_arr = result["alpha"]
+                if alpha_arr.ndim == 3:
+                    alpha_arr = alpha_arr[..., 0:1]
+                alpha_t = torch.from_numpy(alpha_arr.astype(np.float32))
+                proc_t  = torch.from_numpy(result["processed"].astype(np.float32))
 
-            # alpha: [H, W, 1] → [H, W] for ComfyUI MASK
-            alpha_out = result["alpha"]
-            if alpha_out.ndim == 3:
-                alpha_out = alpha_out[..., 0]
-            alpha_list.append(torch.from_numpy(alpha_out).float())
+            fg_list.append(fg_t.float())
+            # MASK wants [H, W] — drop trailing channel dim
+            alpha_2d = alpha_t[..., 0] if alpha_t.ndim == 3 else alpha_t
+            alpha_list.append(alpha_2d.float())
+            # Convert linear premul preview to sRGB for display
+            proc_srgb = linear_to_srgb(proc_t[..., :3])
+            processed_list.append(proc_srgb.clamp(0, 1).float())
 
-            # processed: [H, W, 4] linear premul RGBA → show as sRGB RGB preview
-            proc = result["processed"]
-            # Convert linear premul RGB to sRGB for display (drop alpha channel)
-            proc_rgb = proc[..., :3]
-            proc_srgb = linear_to_srgb(proc_rgb)
-            processed_list.append(torch.from_numpy(proc_srgb.astype(np.float32)))
-
-        fg_batch = torch.stack(fg_list)
-        alpha_batch = torch.stack(alpha_list)
-        processed_batch = torch.stack(processed_list)
-
-        return (fg_batch, alpha_batch, processed_batch)
+        return (
+            torch.stack(fg_list),
+            torch.stack(alpha_list),
+            torch.stack(processed_list),
+        )
 
 
-NODE_CLASS_MAPPINGS = {
-    "CK_Keyer": CK_Keyer,
-}
-
-NODE_DISPLAY_NAME_MAPPINGS = {
-    "CK_Keyer": "CorridorKey Keyer",
-}
+NODE_CLASS_MAPPINGS = {"CK_Keyer": CK_Keyer}
+NODE_DISPLAY_NAME_MAPPINGS = {"CK_Keyer": "CorridorKey Keyer"}

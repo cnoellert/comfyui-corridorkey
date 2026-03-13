@@ -2,4 +2,5 @@ timm>=1.0.0
 opencv-python>=4.8.0
 numpy
 scipy
+psutil>=5.9
 corridorkey @ git+https://github.com/nikopueringer/CorridorKey.git
