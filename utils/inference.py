@@ -202,16 +202,6 @@ def _despill_green(image: torch.Tensor, strength: float = 1.0) -> torch.Tensor:
 
 
 def _despeckle_np(alpha_np: np.ndarray, min_size: int) -> np.ndarray:
-    """Connected-component despeckle. CPU/numpy only."""
-    from scipy import ndimage
-    squeeze = alpha_np.ndim == 3
-    a2d     = alpha_np[..., 0] if squeeze else alpha_np
-    binary  = a2d > 0.5
-    labeled, n = ndimage.label(binary)
-    cleaned = binary.copy()
-    for lid in range(1, n + 1):
-        comp = labeled == lid
-        if comp.sum() < min_size:
-            cleaned[comp] = False
-    result = a2d * cleaned.astype(np.float32)
-    return result[..., np.newaxis] if squeeze else result
+    """Connected-component despeckle. Delegates to reference clean_matte."""
+    from CorridorKeyModule.core.color_utils import clean_matte
+    return clean_matte(alpha_np, area_threshold=min_size, dilation=25, blur_size=5)
