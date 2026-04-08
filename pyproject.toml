@@ -5,11 +5,11 @@ description = "ComfyUI nodes for CorridorKey neural green screen keying"
 license = { text = "CC BY-NC-SA 4.0" }
 requires-python = ">=3.10"
 dependencies = [
-    "torch",
     "timm",
     "opencv-python",
     "numpy",
     "scipy",
+    "psutil",
 ]
 
 [project.urls]

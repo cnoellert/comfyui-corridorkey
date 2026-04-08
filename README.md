@@ -35,8 +35,13 @@ Search for **ComfyUI-CorridorKey** and click Install.
 cd ~/ComfyUI/custom_nodes
 git clone https://github.com/cnoellert/comfyui-corridorkey.git ComfyUI-CorridorKey
 cd ComfyUI-CorridorKey
-pip install -r requirements.txt
+python install.py
 ```
+
+The install script intentionally preserves ComfyUI's existing PyTorch stack.
+The upstream `corridorkey` package pins its own `torch`/`torchvision` versions,
+so installing it with full dependency resolution can downgrade a working CUDA
+environment.
 
 ### Model Weights
 
